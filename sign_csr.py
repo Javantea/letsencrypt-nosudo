@@ -109,6 +109,7 @@ def sign_csr(pubkey, csr, email=None, file_based=False, already_registered=False
 
     # need signature for each domain identifiers
     ids = []
+    tests = []
     for domain in domains:
         sys.stderr.write("Building request for {}...\n".format(domain))
         id_nonce = urllib2.urlopen(nonce_req).headers['Replay-Nonce']
@@ -190,18 +191,18 @@ def sign_csr(pubkey, csr, email=None, file_based=False, already_registered=False
     # Step 5: Ask the user to sign the registration and requests
     regsig = ''
     if not already_registered:
-        regsig = 'openssl dgst -sha256 -sign user.key -out {} {}'.format(reg_file_sig_name, reg_file_name)
+        regsig = 'openssl dgst -sha256 -sign ../user.key -out {} {}'.format(reg_file_sig_name, reg_file_name)
     #end if
     sys.stderr.write("""\
-STEP 2: You need to sign some files (replace 'user.key' with your user private key).
+STEP 2: You need to sign some files (replace '../user.key' with your user private key).
 
 {}
 {}
-openssl dgst -sha256 -sign user.key -out {} {}
+openssl dgst -sha256 -sign ../user.key -out {} {}
 
 """.format(
     regsig,
-    "\n".join("openssl dgst -sha256 -sign user.key -out {} {}".format(i['sig_name'], i['file_name']) for i in ids),
+    "\n".join("openssl dgst -sha256 -sign ../user.key -out {} {}".format(i['sig_name'], i['file_name']) for i in ids),
     csr_file_sig_name, csr_file_name))
 
     stdout = sys.stdout
@@ -308,12 +309,12 @@ openssl dgst -sha256 -sign user.key -out {} {}
 
     # Step 9: Ask the user to sign the challenge responses
     sys.stderr.write("""\
-STEP 3: You need to sign some more files (replace 'user.key' with your user private key).
+STEP 3: You need to sign some more files (replace '../user.key' with your user private key).
 
 {}
 
 """.format(
-    "\n".join("openssl dgst -sha256 -sign user.key -out {} {}".format(
+    "\n".join("openssl dgst -sha256 -sign ../user.key -out {} {}".format(
         i['sig_name'], i['file_name']) for i in tests)))
 
     stdout = sys.stdout
@@ -460,8 +461,8 @@ Prerequisites:
 
 Example: Generate an account keypair, a domain key and csr, and have the domain csr signed.
 --------------
-$ openssl genrsa 4096 > user.key
-$ openssl rsa -in user.key -pubout > user.pub
+$ openssl genrsa 4096 > ../user.key
+$ openssl rsa -in ../user.key -pubout > user.pub
 $ openssl genrsa 4096 > domain.key
 $ openssl req -new -sha256 -key domain.key -subj "/CN=example.com" > domain.csr
 $ python sign_csr.py --public-key user.pub domain.csr > signed.crt
