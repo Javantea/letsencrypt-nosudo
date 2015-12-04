@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-import argparse, subprocess, json, os, urllib2, sys, base64, binascii, ssl, \
-    hashlib, tempfile, re, time, copy, textwrap, copy
+#ssl, hashlib
+import argparse, subprocess, json, os, urllib2, sys, base64, binascii, \
+    tempfile, re, time, copy, textwrap, copy
 
-def sign_csr(pubkey, csr, email=None):
+def sign_csr(pubkey, csr, email=None, already_registered=False):
     """Use the ACME protocol to get an ssl certificate signed by a
     certificate authority.
 
@@ -90,12 +91,14 @@ def sign_csr(pubkey, csr, email=None):
     reg_protected = copy.deepcopy(header)
     reg_protected.update({"nonce": urllib2.urlopen(nonce_req).headers['Replay-Nonce']})
     reg_protected64 = _b64(json.dumps(reg_protected, sort_keys=True, indent=4))
-    reg_file = tempfile.NamedTemporaryFile(dir=".", prefix="register_", suffix=".json")
-    reg_file.write("{}.{}".format(reg_protected64, reg_b64))
-    reg_file.flush()
-    reg_file_name = os.path.basename(reg_file.name)
-    reg_file_sig = tempfile.NamedTemporaryFile(dir=".", prefix="register_", suffix=".sig")
-    reg_file_sig_name = os.path.basename(reg_file_sig.name)
+    if not already_registered:
+        reg_file = tempfile.NamedTemporaryFile(dir=".", prefix="register_", suffix=".json")
+        reg_file.write("{}.{}".format(reg_protected64, reg_b64))
+        reg_file.flush()
+        reg_file_name = os.path.basename(reg_file.name)
+        reg_file_sig = tempfile.NamedTemporaryFile(dir=".", prefix="register_", suffix=".sig")
+        reg_file_sig_name = os.path.basename(reg_file_sig.name)
+    #end if
 
     # need signature for each domain identifier and challenge
     ids = []
@@ -131,7 +134,7 @@ def sign_csr(pubkey, csr, email=None):
         })
 
         # challenge request
-        test_path = _b64(os.urandom(16))
+        #test_path = _b64(os.urandom(16))
         test_raw = json.dumps({
             "resource": "challenge",
             "type": "simpleHttp",
@@ -177,16 +180,20 @@ def sign_csr(pubkey, csr, email=None):
     csr_file_sig_name = os.path.basename(csr_file_sig.name)
 
     # Step 5: Ask the user to sign the registration and requests
+    regsig = ''
+    if not already_registered:
+        regsig = 'openssl dgst -sha256 -sign user.key -out {} {}'.format(reg_file_sig_name, reg_file_name)
+    #end if
     sys.stderr.write("""\
 STEP 2: You need to sign some files (replace 'user.key' with your user private key).
 
-openssl dgst -sha256 -sign user.key -out {} {}
+{}
 {}
 {}
 openssl dgst -sha256 -sign user.key -out {} {}
 
 """.format(
-    reg_file_sig_name, reg_file_name,
+    regsig,
     "\n".join("openssl dgst -sha256 -sign user.key -out {} {}".format(i['sig_name'], i['file_name']) for i in ids),
     "\n".join("openssl dgst -sha256 -sign user.key -out {} {}".format(i['sig_name'], i['file_name']) for i in tests),
     csr_file_sig_name, csr_file_name))
@@ -197,8 +204,10 @@ openssl dgst -sha256 -sign user.key -out {} {}
     sys.stdout = stdout
 
     # Step 6: Load the signatures
-    reg_file_sig.seek(0)
-    reg_sig64 = _b64(reg_file_sig.read())
+    if not already_registered:
+        reg_file_sig.seek(0)
+        reg_sig64 = _b64(reg_file_sig.read())
+    #end if
     for n, i in enumerate(ids):
         i['sig'].seek(0)
         i['sig64'] = _b64(i['sig'].read())
@@ -206,29 +215,30 @@ openssl dgst -sha256 -sign user.key -out {} {}
         tests[n]['sig64'] = _b64(tests[n]['sig'].read())
 
     # Step 7: Register the user
-    sys.stderr.write("Registering {}...\n".format(email))
-    reg_data = json.dumps({
-        "header": header,
-        "protected": reg_protected64,
-        "payload": reg_b64,
-        "signature": reg_sig64,
-    }, sort_keys=True, indent=4)
-    try:
-        resp = urllib2.urlopen("{}/acme/new-reg".format(CA), reg_data)
-        result = json.loads(resp.read())
-    except urllib2.HTTPError as e:
-        err = e.read()
-        # skip already registered accounts
-        if "Registration key is already in use" in err:
-            sys.stderr.write("Already registered. Skipping...\n")
-        else:
-            sys.stderr.write("Error: reg_data:\n")
-            sys.stderr.write(reg_data)
-            sys.stderr.write("\n")
-            sys.stderr.write(err)
-            sys.stderr.write("\n")
-            raise
-
+    if not already_registered:
+        sys.stderr.write("Registering {}...\n".format(email))
+        reg_data = json.dumps({
+            "header": header,
+            "protected": reg_protected64,
+            "payload": reg_b64,
+            "signature": reg_sig64,
+        }, sort_keys=True, indent=4)
+        try:
+            resp = urllib2.urlopen("{}/acme/new-reg".format(CA), reg_data)
+            result = json.loads(resp.read())
+        except urllib2.HTTPError as e:
+            err = e.read()
+            # skip already registered accounts
+            if "Registration key is already in use" in err:
+                sys.stderr.write("Already registered. Skipping...\n")
+            else:
+                sys.stderr.write("Error: reg_data:\n")
+                sys.stderr.write(reg_data)
+                sys.stderr.write("\n")
+                sys.stderr.write(err)
+                sys.stderr.write("\n")
+                raise
+    #end if
     # Step 8: Request challenges for each domain
     responses = []
     for n, i in enumerate(ids):
@@ -249,6 +259,7 @@ openssl dgst -sha256 -sign user.key -out {} {}
             sys.stderr.write(e.read())
             sys.stderr.write("\n")
             raise
+        sys.stderr.write('res: {}\n'.format(result))
         challenge = [c for c in result['challenges'] if c['type'] == "simpleHttp"][0]
 
         # challenge response payload
@@ -273,6 +284,7 @@ openssl dgst -sha256 -sign user.key -out {} {}
             "file_name": response_file_name,
             "sig": response_file_sig,
             "sig_name": response_file_sig_name,
+            "token": challenge['token'],
         })
 
     # Step 9: Ask the user to sign the challenge responses
@@ -297,6 +309,7 @@ STEP 3: You need to sign some more files (replace 'user.key' with your user priv
 
     # Step 11: Ask the user to host the token on their server
     for n, i in enumerate(ids):
+        sys.stderr.write("i: {}\n".format(i))
         response_payload = json.dumps({
             "header": {"alg": "RS256"},
             "protected": responses[n]['protected64'],
@@ -312,7 +325,9 @@ sudo python -c "import BaseHTTPServer; \\
     s = BaseHTTPServer.HTTPServer(('0.0.0.0', 80), h); \\
     s.serve_forever()"
 
-""".format(n+4, i['domain'], response_payload))
+    or you can write this file: http://{}/.well-known/acme-challenge/{} with this data:
+    {}
+""".format(n+4, i['domain'], response_payload, i['domain'], responses[n]['token'], response_payload.replace('\\"', '"')))
 
         stdout = sys.stdout
         sys.stdout = sys.stderr
@@ -357,7 +372,7 @@ sudo python -c "import BaseHTTPServer; \\
                 sys.stderr.write("Passed {} challenge!\n".format(i['domain']))
                 break
             else:
-                raise KeyError("'{}' challenge did not pass: {}".format(challenge_status))
+                raise KeyError("'{}' challenge did not pass: {}".format(i['domain'], challenge_status))
 
     # Step 14: Get the certificate signed
     sys.stderr.write("Requesting signature...\n")
@@ -420,9 +435,10 @@ $ python sign_csr.py --public-key user.pub domain.csr > signed.crt
 """)
     parser.add_argument("-p", "--public-key", required=True, help="path to your account public key")
     parser.add_argument("-e", "--email", default=None, help="contact email, default is webmaster@<shortest_domain>")
+    parser.add_argument("-r", "--registered", action='store_true', help="Use this flag if you are already registered to save one signature and one unnecessary request.")
     parser.add_argument("csr_path", help="path to your certificate signing request")
 
     args = parser.parse_args()
-    signed_crt = sign_csr(args.public_key, args.csr_path, email=args.email)
+    signed_crt = sign_csr(args.public_key, args.csr_path, email=args.email, already_registered=args.registered)
     sys.stdout.write(signed_crt)
 
