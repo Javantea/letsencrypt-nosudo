@@ -1,17 +1,14 @@
 #Let's Encrypt Without Sudo
 
-**WARNING: THE LET'S ENCRYPT CERTIFICATE AUTHORITY IS ONLY IN BETA! YOU MUST
-HAVE A WHITELISTED DOMAIN DURING BETA. GENERAL AVAILABILITY WILL BE SOON!**
-
 The [Let's Encrypt](https://letsencrypt.org/) initiative is a fantastic program
-that is going to offer **free** https certificates! However, the one catch is
-that you need to use their command program to get a free certificate. You have
-to run it on your your server as root, and it tries to edit your apache/nginx
-config files.
+that offers **free** https certificates! However, the one catch is that you need
+to use their command program to get a free certificate. The default instructions
+all assume that you will run it on your your server as root, and that it will
+edit your apache/nginx config files.
 
 I love the Let's Encrypt devs dearly, but there's no way I'm going to trust
-their script to run on my server as root and be able to edit my server configs.
-I'd just like the free ssl certificate, please.
+their script to run on my server as root, be able to edit my server configs, and
+have access to my private keys. I'd just like the free ssl certificate, please.
 
 So I made a script that does that. You generate your private key and certificate
 signing request (CSR) like normal, then run `sign_csr.py` with your CSR to get
@@ -30,10 +27,15 @@ python https server that you can inspect for yourself before you run it.
 
 * [Donate](#donate)
 * [Prerequisites](#prerequisites)
-* [How to use the script](#how-to-use-the-script)
-* [Example Use](#example-use)
-* [How to use the signed https certificate](#how-to-use-the-signed-https-certificate)
-* [Demo](#demo)
+* Signing script
+    * [How to use the signing script](#how-to-use-the-signing-script)
+    * [Example use of the signing script](#example-use-of-the-signing-script)
+    * [How to use the signed https certificate](#how-to-use-the-signed-https-certificate)
+    * [Demo](#demo)
+* Revocation script
+    * [How to use the revocation script](#how-to-use-the-revocation-script)
+    * [Example use of the revocation script](#example-use-of-the-revocation-script)
+* [Alternative: Official Let's Encrypt Client](#alternative-official-lets-encrypt-client)
 * [Feedback/Contributing](#feedbackcontributing)
 
 ##Donate
@@ -48,7 +50,7 @@ but they do fantastic work.
 * openssl
 * python
 
-##How to use the script
+##How to use the signing script
 
 First, you need to generate an user account key for Let's Encrypt.
 This is the key that you use to register with Let's Encrypt. If you
@@ -134,10 +136,11 @@ optional arguments:
                         path to your account public key
   -e EMAIL, --email EMAIL
                         contact email, default is webmaster@<shortest_domain>
+  -f, --file-based      if set, a file-based response is used
 user@hostname:~$
 ```
 
-##Example Use
+##Example use of the signing script
 
 ###Commands (what you do in your main terminal window)
 ```
@@ -271,12 +274,18 @@ with your private key to run an https server. You just security transfer (using
 include them in the https settings in your web server's configuration. Here's an
 example on how to configure an nginx server:
 
+```
+#NOTE: For nginx, you need to append the Let's Encrypt intermediate cert to your cert
+user@hostname:~$ wget https://letsencrypt.org/certs/lets-encrypt-x1-cross-signed.pem
+user@hostname:~$ cat signed.crt lets-encrypt-x1-cross-signed.pem > chained.pem
+```
+
 ```nginx
 server {
     listen 443;
     server_name letsencrypt.daylightpirates.org;
     ssl on;
-    ssl_certificate signed.crt;
+    ssl_certificate chained.pem;
     ssl_certificate_key domain.key;
     ssl_session_timeout 5m;
     ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
@@ -298,16 +307,116 @@ Here's a website that is using a certificate signed using `sign_csr.py`:
 
 [https://letsencrypt.daylightpirates.org/](https://letsencrypt.daylightpirates.org/)
 
+##How to use the revocation script
+
+First, you will need to the user account key for Let's Encrypt that was used
+when the certifacate was signed.
+
+Second, you will need the PEM encoded signed certificate that was produced by
+`sign_csr.py`.
+
+Third, you run the script using python and passing in the path to your user
+account public key and the signed domain certificate. The paths can be relative
+or absolute.  If you wish to give the script access to your user private key, it
+can accept that as an optional argument.
+
+```sh
+python revoke_crt.py --public-key user.pub domain.crt
+```
+
+When you run the script, it will ask you do one manual signature.  It has to ask you
+to do these because it doesn't know your private key. You can edit the manual
+commands to fit your situation (e.g. if your private key is in a different
+location).
+
+NOTE: When the script asks you to run these manual commands, you need to run
+them in a separate terminal window. You need to keep the script open while you
+run them. They sign temporary test files that the script created, so if you exit
+or continue the script before you run the commands, those test files will be
+destroyed before they can be used correctly (and you'll have to run the script
+again).
+
+The `*.json` and `*.sig` files are temporary files automatically generated by
+the script and will be destroyed when the script stops. They only contain the
+protocol requests and signatures. They do NOT contain your private keys
+because this script does not have access to your private keys.
+
+###Help text
+```
+user@hostname:~$ python revoke_crt.py --help
+usage: revoke_crt.py [-h] -p PUBLIC_KEY [-r PRIVATE_KEY] crt_path
+
+Get a SSL certificate revoked by a Let's Encrypt (ACME) certificate authority.
+You do NOT need to run this script on your server and this script does not ask
+for your private keys. It will print out commands that you need to run with
+your private key, which gives you a chance to review the commands instead of
+trusting this script.
+
+NOTE: YOUR PUBLIC KEY NEEDS TO BE THE SAME KEY USED TO ISSUE THE CERTIFICATE.
+
+Prerequisites:
+* openssl
+* python
+
+Example:
+--------------
+$ python revoke_crt.py --public-key user.pub domain.crt
+--------------
+
+positional arguments:
+  crt_path              path to your signed certificate
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -p PUBLIC_KEY, --public-key PUBLIC_KEY
+                        path to your account public key
+user@hostname:~$
+```
+
+##Example use of the revocation script
+
+###Commands (what you do in your main terminal window)
+```
+user@hostname:~$ python revoke_crt.py --public-key user.pub domain.crt
+Reading pubkey file...
+Found public key!
+STEP 1: You need to sign a file (replace 'user.key' with your user private key)
+
+openssl dgst -sha256 -sign user.key -out revoke_Z5Qxj3.sig revoke_TKSK9w.json
+
+Press Enter when you've run the above command in a new terminal window...
+Requesting revocation...
+Certificate revoked!
+user@hostname:~$
+```
+
+###Manual Command (the stuff the script asked you to do in a 2nd terminal)
+```
+#signed files
+user@hostname:~$ openssl dgst -sha256 -sign user.key -out revoke_Z5Qxj3.sig revoke_TKSK9w.json
+```
+
+##Alternative: Official Let's Encrypt Client
+
+After I released this script, Let's Encrypt added a manual authenticator to
+allow the Let's Encrypt client to not have to be run on your server. Hooray!
+However, the Let's Encrypt client still has access to your user account private
+keys, so please be aware of that. Anyway, check out the comment on issue
+[#5](https://github.com/diafygi/letsencrypt-nosudo/issues/5#issuecomment-117283651)
+to see how to use the manual authenticator in the official Let's Encrypt client.
+
+```
+./letsencrypt-auto --email diafygi@gmail.com --text --authenticator manual --work-dir /tmp/work/ --config-dir /tmp/config/ --logs-dir /tmp/logs/ auth --cert-path /tmp/certs/ --chain-path /tmp/chains/ --csr ~/Desktop/domain.csr
+```
+
 ##Feedback/Contributing
 
 I'd love to receive feedback, issues, and pull requests to make this script
-better. The script itself, `sign_csr.py`, is less than 400 lines of code, so
+better. The script itself, `sign_csr.py`, is less than 500 lines of code, so
 feel free to read through it! I tried to comment things well and make it crystal
 clear what it's doing.
 
-For example, it currently can't do any ACME challenges besides SimpleHTTP. Maybe
-someone could do a pull request to add more challenge compatibility? Also, it
-currently can't revoke certificates, and I don't want to include that in the
-`sign_csr.py` script. Perhaps there should also be a `revoke_crt.py` script?
+For example, it currently can't do any ACME challenges besides 'http-01'. Maybe
+someone could do a pull request to add more challenge compatibility?
 
 
